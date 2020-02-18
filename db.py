@@ -1,4 +1,5 @@
 from collections import Iterable
+from datetime import datetime
 from platform import system
 from threading import Lock, Thread
 from time import sleep
@@ -69,19 +70,17 @@ class TmpCursor(TmpConnection):
 class ConnectionPool:
     def __init__(self, connect):
         self.connect = connect
-        self.connections = []
-        self.running = []
-        self.free = []
+        self.connections, self.running, self.free = [], [], []
         self.__lock = Lock()
         self.num = 0
 
     def __del__(self):
         [c.close() for c in self.connections]
 
-    def connection(self):
+    def connection(self) -> TmpConnection:
         return TmpConnection(self)
 
-    def cursor(self):
+    def cursor(self) -> TmpCursor:
         return TmpCursor(self)
 
     def free_connection(self, conn):
@@ -109,15 +108,17 @@ class DBConnection:
     _pool: ConnectionPool
 
     @classmethod
-    def connection(cls):
+    def connection(cls) -> TmpConnection:
         return cls._pool.connection()
 
     @classmethod
-    def cursor(cls):
+    def cursor(cls) -> TmpCursor:
         return cls._pool.cursor()
 
     @classmethod
-    def execute(cls, sql: str, params: Optional[Iterable] = None) -> None:
+    def execute(cls, sql: str, params: Optional[Iterable] = None):
+        if issubclass(cls, MYSQL):
+            sql = sql.replace('?', '%s')
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
@@ -136,28 +137,32 @@ class DBConnection:
 
     @classmethod
     def fetch(cls, sql: str, params: Optional[Iterable] = None) -> Dict[str, Any]:
+        if issubclass(cls, MYSQL):
+            sql = sql.replace('?', '%s')
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, *([params] if params else []))
-                results = cursor.fetchone()
+                results = cursor.fetchone() or {}
             cls._pool.free_connection(conn)
-            return results
+            return results or {}
         except (pymysql.OperationalError, pypyodbc.InterfaceError):
             conn.close()
             results = cls.fetch(sql, params)
             cls._pool.running.remove(conn)
             cls._pool.connections.remove(conn)
-            return results
+            return results or {}
         except pypyodbc.Error as e:
             if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
                 raise e
             results = cls.fetch(sql, params)
             cls._pool.free_connection(conn)
-            return results
+            return results or {}
 
     @classmethod
     def fetchall(cls, sql: str, params: Optional[Iterable] = None) -> List[Dict[str, Any]]:
+        if issubclass(cls, MYSQL):
+            sql = sql.replace('?', '%s')
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
@@ -179,16 +184,64 @@ class DBConnection:
             return results
 
     @classmethod
-    def get_databases(cls) -> Dict[str, dict]:
+    def get_databases(cls) -> Dict[str, dict]:  # used for api mapping
         raise NotImplementedError
 
 
 class MYSQL(DBConnection):
-    pass
+    @classmethod
+    def get_databases(cls) -> Dict[str, dict]:
+        databases = {}
+        for row in cls.fetchall("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY, EXTRA FROM information_schema.columns WHERE TABLE_SCHEMA NOT IN (%s, %s, %s, %s, %s) AND TABLE_SCHEMA NOT LIKE %s", ('information_schema', 'phpmyadmin', 'mysql', 'performance_schema', 'sys', 'phabricator%')):
+            if row['TABLE_SCHEMA'].lower() not in databases:
+                databases[row['TABLE_SCHEMA'].lower()] = {'NAME': row['TABLE_SCHEMA']}
+            database = databases[row['TABLE_SCHEMA'].lower()]
+            if row['TABLE_NAME'].lower() not in database:
+                database[row['TABLE_NAME'].lower()] = {'NAME': row['TABLE_NAME']}
+            table = database[row['TABLE_NAME'].lower()]
+            table[row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'primary_key': row['COLUMN_KEY'] == 'PRI', 'auto_inc': row['EXTRA'] == 'auto_increment', 'name': row['COLUMN_NAME']}
+        for database in databases.values():
+            for table in database:
+                if table == 'NAME':
+                    continue
+                database[table] = {k: {a: b for a, b in v.items() if a != 'position'} if k != 'NAME' else v for k, v in sorted(database[table].items(), key=lambda d: d[1]['position'] if d[0] != 'NAME' else 999)}
+        return databases
 
 
 class MSSQL(DBConnection):
     _driver = 'FreeTDS' if system() == 'Linux' else 'SQL Server'
+
+    @classmethod
+    def get_databases(cls) -> Dict[str, dict]:
+        databases = {}
+        for db in cls.fetchall('SELECT "name" FROM master.dbo.sysdatabases WHERE "name" NOT IN (?, ?, ?, ?) and "name" NOT LIKE ?', ('master', 'tempdb', 'model', 'msdb', 'ReportServer%')):
+            db = f'"{db["name"]}"'
+            for row in cls.fetchall(f'SELECT c.TABLE_CATALOG, c.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION, c.COLUMN_DEFAULT, c.IS_NULLABLE, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, tc.CONSTRAINT_TYPE, ic.is_identity FROM {db}.information_schema.COLUMNS c LEFT JOIN {db}.information_schema.KEY_COLUMN_USAGE kcu ON c.TABLE_CATALOG=kcu.TABLE_CATALOG AND c.TABLE_NAME=kcu.TABLE_NAME AND c.COLUMN_NAME=kcu.COLUMN_NAME LEFT JOIN {db}.information_schema.TABLE_CONSTRAINTS tc ON kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME LEFT JOIN {db}.sys.tables t ON t.name=c.TABLE_NAME LEFT JOIN {db}.sys.identity_columns ic ON t.object_id=ic.object_id AND ic.name=c.COLUMN_NAME'):
+                if row['TABLE_CATALOG'].lower() not in databases:
+                    databases[row['TABLE_CATALOG'].lower()] = {'NAME': row['TABLE_CATALOG']}
+                database = databases[row['TABLE_CATALOG'].lower()]
+                if row['TABLE_NAME'].lower() not in database:
+                    database[row['TABLE_NAME'].lower()] = {'NAME': row['TABLE_NAME']}
+                table = database[row['TABLE_NAME'].lower()]
+                table[row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'name': row['COLUMN_NAME'], 'primary_key': row['CONSTRAINT_TYPE'] == 'PRIMARY KEY', 'auto_inc': row['is_identity'] or False}
+        for database in databases.values():
+            for table in database:
+                if table == 'NAME':
+                    continue
+                database[table] = {k: {a: b for a, b in v.items() if a != 'position'} if k != 'NAME' else v for k, v in sorted(database[table].items(), key=lambda d: d[1]['position'] if d[0] != 'NAME' else 999)}
+        return databases
+
+
+def map_dbs(wait: bool = False):
+    def get(c):
+        start = datetime.now()
+        SERVERS[c.__name__.lower()] = (c.get_databases(), c)
+        print(f'[SERVER] {c.__name__}:', datetime.now() - start)
+
+    threads = [Thread(target=get, args=(c,)) for c in globals().values() if type(c) == type and issubclass(c, (MSSQL, MYSQL)) and c.__name__ not in {'MSSQL', 'MYSQL'}]
+    [thread.start() for thread in threads]
+    if wait:
+        [thread.join() for thread in threads]
 
 
 pypyodbc.pooling = False

@@ -342,29 +342,7 @@ UCS_BUF = lambda s: s
 
 
 def ucs_dec(buffer) -> str:
-    i = 0
-    uchars = []
-    while True:
-        uchar = buffer.raw[i:i + UCS_LENGTH].decode(ODBC_DECODING)
-        if uchar == '\x00':
-            break
-        uchars.append(uchar)
-        i += UCS_LENGTH
-    return ''.join(uchars)
-
-
-def utf16_be_dec(buffer) -> str:
-    i = 0
-    uchars = []
-    while True:
-        # TOD O: verify that this condition correctly identifies a surrogate pair in UTF-16 BE
-        n = int(ord(buffer.raw[i + 1]) & 0xd0 == 0xd0) + 1
-        uchar = buffer.raw[i:i + n * UCS_LENGTH].decode(ODBC_DECODING)
-        if uchar == '\x00':
-            break
-        uchars.append(uchar)
-        i += n * UCS_LENGTH
-    return ''.join(uchars)
+    return buffer.raw.decode(ODBC_ENCODING).split('\x00')[0]
 
 
 FROM_BUFFER_U = lambda buffer: buffer.value
@@ -375,7 +353,7 @@ if sys.platform not in {'win32', 'cli', 'cygwin'}:
         CREATE_BUFFER_U = CREATE_BUFFER
         WCHAR_POINTER = ctypes.c_char_p
         UCS_BUF = lambda s: s.encode(ODBC_ENCODING)
-        FROM_BUFFER_U = utf16_be_dec if ODBC_ENCODING == 'utf_16' else ucs_dec
+        FROM_BUFFER_U = ucs_dec
     # Exoteric case, don't really care.
     elif UNICODE_SIZE < SQLWCHAR_SIZE:
         raise OdbcLibraryError('Using narrow Python build with ODBC library expecting wide unicode is not supported.')
@@ -458,7 +436,7 @@ SQL_DATA_TYPE_DICT = {
     SQL_TIME: (time, tm_cvt, SQL_C_CHAR, CREATE_BUFFER, 20, False),
     SQL_SS_TIME2: (time, tm_cvt, SQL_C_CHAR, CREATE_BUFFER, 20, False),
     SQL_TIMESTAMP: (datetime, dttm_cvt, SQL_C_CHAR, CREATE_BUFFER, 30, False),
-    SQL_VARCHAR: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 2048, False),
+    SQL_VARCHAR: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 2048, True),
     SQL_LONGVARCHAR: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 20500, True),
     SQL_BINARY: (bytearray, BYTEARRAY_CVT, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
     SQL_VARBINARY: (bytearray, BYTEARRAY_CVT, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
@@ -467,7 +445,7 @@ SQL_DATA_TYPE_DICT = {
     SQL_TINYINT: (int, int, SQL_C_CHAR, CREATE_BUFFER, 150, False),
     SQL_BIT: (bool, lambda x: x == b'1', SQL_C_CHAR, CREATE_BUFFER, 2, False),
     SQL_WCHAR: (str, lambda x: x, SQL_C_WCHAR, CREATE_BUFFER_U, 2048, False),
-    SQL_WVARCHAR: (str, lambda x: x, SQL_C_WCHAR, CREATE_BUFFER_U, 2048, False),
+    SQL_WVARCHAR: (str, lambda x: x, SQL_C_WCHAR, CREATE_BUFFER_U, 2048, True),
     SQL_GUID: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 2048, False),
     SQL_WLONGVARCHAR: (str, lambda x: x, SQL_C_WCHAR, CREATE_BUFFER_U, 20500, True),
     SQL_TYPE_DATE: (date, dt_cvt, SQL_C_CHAR, CREATE_BUFFER, 30, False),
@@ -595,8 +573,8 @@ def ctrl_err(ht, h, ansi: bool):
                 raise OperationalError(state, err_text)
             elif state[:2] in {raw_s('IM'), raw_s('HY')}:
                 raise Error(state, err_text)
-            else:
-                raise DatabaseError(state, err_text)
+            # else:
+            #     raise DatabaseError(state, err_text)
         elif ret == -2:
             # The handle passed is an invalid handle
             raise ProgrammingError('', 'SQL_INVALID_HANDLE')
@@ -605,14 +583,14 @@ def ctrl_err(ht, h, ansi: bool):
                 err_list.append((state.value, message.value, native_error.value))
             else:
                 err_list.append((FROM_BUFFER_U(state), FROM_BUFFER_U(message), native_error.value))
-            number_errors += 1
+            # number_errors += 1
         elif ret == -1:
             raise ProgrammingError('', 'SQL_ERROR')
 
 
 def check_success(odbc_obj, ret):
     """Validate return value, if not success, raise exceptions based on the handle"""
-    if ret not in (SQL_SUCCESS, SQL_SUCCESS_WITH_INFO, SQL_NO_DATA):
+    if ret not in (SQL_SUCCESS, SQL_SUCCESS_WITH_INFO, SQL_NO_DATA, SQL_NULL_DATA):
         if isinstance(odbc_obj, Cursor):
             ctrl_err(SQL_HANDLE_STMT, odbc_obj.stmt_h, odbc_obj.ansi)
         elif isinstance(odbc_obj, Connection):
@@ -695,8 +673,7 @@ def get_type(v):
 class Cursor:
     def __init__(self, conx, row_type_callable=None):
         """ Initialize self.stmt_h, which is the handle of a statement
-        A statement is actually the basis of a python"cursor" object
-        """
+        A statement is actually the basis of a python "cursor" object"""
         self.stmt_h = ctypes.c_void_p()
         self.connection = conx
         self.ansi = conx.ansi
@@ -989,7 +966,6 @@ class Cursor:
                 # print param_valparam_buffer, param_buffer.value
                 check_success(self, ret)
             if not many_mode:
-                self._num_of_rows()
                 self._update_desc()
         else:
             self._free_stmt()
@@ -1000,7 +976,6 @@ class Cursor:
             else:
                 ret = ODBC_API.SQLExecDirect(self.stmt_h, ctypes.c_char_p(query_string), len(query_string))
             check_success(self, ret)
-            self._num_of_rows()
             self._update_desc()
         return self
 
@@ -1011,7 +986,6 @@ class Cursor:
             self.close()
         for params in params_list:
             self.execute(query_string, params, many_mode=True)
-        self._num_of_rows()
         self.rowcount = -1
         self._update_desc()
 
@@ -1032,14 +1006,12 @@ class Cursor:
                 total_buf_len = self._outputsize.get(None, total_buf_len)
             # over-write if there's pre-set size value for the "col_num" column
             total_buf_len = self._outputsize.get(col_num, total_buf_len)
-            # if the size of the buffer is very long, do not bind
-            # because a large buffer decrease performance, and sometimes you only get a NULL value.
-            # in that case use sqlgetdata instead.
+            # if the size of the buffer is very long, do not bind because a large buffer decrease performance, and sometimes you only get a NULL value. in that case use sqlgetdata instead.
             if self.description[col_num][2] >= 1024:
                 dynamic_length = True
             alloc_buffer = SQL_DATA_TYPE_DICT[col_sql_data_type][3](total_buf_len)
             used_buf_len = C_SSIZE_T()
-            if col_sql_data_type in (SQL_CHAR, SQL_VARCHAR, SQL_LONGVARCHAR):
+            if col_sql_data_type in {SQL_CHAR, SQL_VARCHAR, SQL_LONGVARCHAR}:
                 target_type = SQL_C_WCHAR
                 alloc_buffer = CREATE_BUFFER_U(total_buf_len)
             if bind_data and dynamic_length:
@@ -1080,16 +1052,16 @@ class Cursor:
             self.description = None
         self._create_col_buf()
 
-    def _num_of_rows(self):
-        """Get the number of rows"""
-        if not self.connection:
-            self.close()
-        nor = C_SSIZE_T()
-        ret = ODBC_API.SQLRowCount(self.stmt_h, ADDR(nor))
-        if ret != SQL_SUCCESS:
-            check_success(self, ret)
-        self.rowcount = nor.value
-        return self.rowcount
+    # def _num_of_rows(self):
+    #     """Get the number of rows"""
+    #     if not self.connection:
+    #         self.close()
+    #     nor = C_SSIZE_T()
+    #     ret = ODBC_API.SQLRowCount(self.stmt_h, ADDR(nor))
+    #     if ret not in {SQL_SUCCESS, SQL_NO_DATA}:
+    #         check_success(self, ret)
+    #     self.rowcount = nor.value
+    #     return self.rowcount
 
     def _num_of_cols(self):
         """Get the number of cols"""
@@ -1120,10 +1092,10 @@ class Cursor:
             '''Bind buffers for the record set columns'''
             value_list = []
             col_num = 1
-            for col_name, target_type, used_buf_len, ADDR_used_buf_len, alloc_buffer, ADDR_alloc_buffer, total_buf_len, buf_cvt_func, bind_data in self._col_buffer_list:
+            for col_name, target_type, used_buf_len, ADDR_used_buf_len, alloc_buffer, ADDR_alloc_buffer, total_buf_len, buf_cvt_func, bound_data in self._col_buffer_list:
                 raw_data_parts = []
-                while 1:
-                    if bind_data:
+                while True:
+                    if bound_data:
                         ret = SQL_SUCCESS
                     else:
                         ret = ODBC_API.SQLGetData(self.stmt_h, col_num, target_type, ADDR_alloc_buffer, total_buf_len, ADDR_used_buf_len)
@@ -1176,8 +1148,7 @@ class Cursor:
         else:
             if ret == SQL_NO_DATA:
                 return None
-            else:
-                check_success(self, ret)
+            check_success(self, ret)
 
     def _free_stmt(self, free_type=None):
         if not self.connection:
@@ -1203,7 +1174,6 @@ class Cursor:
         if not self.connection:
             self.close()
         if ODBC_API.SQLGetTypeInfo(self.stmt_h, sql_type or 0) in {SQL_SUCCESS, SQL_SUCCESS_WITH_INFO}:
-            self._num_of_rows()
             self._update_desc()
             return self.fetchone()
 
@@ -1323,9 +1293,9 @@ class Connection:
         check_success(self, ODBC_API.SQLSetConnectAttr(self.dbc_h, 102, int(self.autocommit), SQL_IS_UINTEGER))
         # Set the connection's attribute of "readonly"
         self.readonly = readonly
-        if self.readonly:
+        if readonly:
             check_success(self, ODBC_API.SQLSetConnectAttr(self.dbc_h, SQL_ATTR_ACCESS_MODE, SQL_MODE_READ_ONLY, SQL_IS_UINTEGER))
-        check_success(self, ODBC_API.SQLSetConnectAttr(self.dbc_h, SQL_ATTR_ACCESS_MODE, self.readonly and SQL_MODE_READ_ONLY or 0, SQL_IS_UINTEGER))
+        check_success(self, ODBC_API.SQLSetConnectAttr(self.dbc_h, SQL_ATTR_ACCESS_MODE, readonly and SQL_MODE_READ_ONLY or 0, SQL_IS_UINTEGER))
         self.connected = 1
         self.update_db_special_info()
 
@@ -1359,14 +1329,13 @@ class Connection:
         except Exception as e:
             print(e.__repr__())
         for sql_type in (SQL_TYPE_TIMESTAMP, SQL_TYPE_DATE, SQL_TYPE_TIME, SQL_SS_TIME2):
-            cur = Cursor(self, row_type_callable=tuple_row)
-            try:
-                info_tuple = cur.get_type_info(sql_type)
-                if info_tuple is not None:
-                    self.type_size_dic[sql_type] = info_tuple[2], info_tuple[14]
-            except Exception as e:
-                print(e.__repr__())
-            cur.close()
+            with Cursor(self, row_type_callable=tuple_row) as cur:
+                try:
+                    info_tuple = cur.get_type_info(sql_type)
+                    if info_tuple is not None:
+                        self.type_size_dic[sql_type] = info_tuple[2], info_tuple[14]
+                except Exception as e:
+                    print(e.__repr__())
         self.support_SQLDescribeParam = False
         try:
             driver_name = self.getinfo(SQL_DRIVER_NAME)
@@ -1402,15 +1371,9 @@ class Connection:
             result = alloc_buffer.value
         else:
             alloc_buffer = CREATE_BUFFER(1000)
-            if self.ansi:
-                api_f = ODBC_API.SQLGetInfo
-            else:
-                api_f = ODBC_API.SQLGetInfoW
+            api_f = ODBC_API.SQLGetInfo if self.ansi else ODBC_API.SQLGetInfoW
             check_success(self, api_f(self.dbc_h, infotype, ADDR(alloc_buffer), 1000, ADDR(C_SHORT())))
-            if self.ansi:
-                result = alloc_buffer.value
-            else:
-                result = ucs_dec(alloc_buffer)
+            result = alloc_buffer.value if self.ansi else ucs_dec(alloc_buffer)
             if A_INFO_TYPES[infotype] == 'GI_YESNO':
                 result = str(result[0]) == str('Y')
         return result
@@ -1434,8 +1397,7 @@ class Connection:
         if not self.connected:
             raise ProgrammingError('HY000', 'Attempt to close a closed connection.')
         # for cur in self._cursors:
-        # if not cur is None:
-        # if not cur.closed:
+        # if cur is not None and not cur.closed:
         # cur.close()
         if self.connected:
             if not self.autocommit:
