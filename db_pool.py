@@ -3,7 +3,7 @@ from datetime import datetime
 from platform import system
 from threading import Lock, Thread
 from time import sleep
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 
 try:
     import pymysql
@@ -106,6 +106,7 @@ class ConnectionPool:
 
 class DBConnection:
     _pool: ConnectionPool
+    success_hooks: List[Callable[[str, Optional[Iterable]], None]] = []
 
     @classmethod
     def connection(cls) -> TmpConnection:
@@ -124,6 +125,7 @@ class DBConnection:
             with conn.cursor() as cursor:
                 cursor.execute(sql, *([params] if params else []))
             cls._pool.free_connection(conn)
+            [hook(sql, params) for hook in cls.success_hooks]
         except (pymysql.OperationalError, pypyodbc.InterfaceError):
             conn.close()
             cls._pool.running.remove(conn)
@@ -198,8 +200,7 @@ class MYSQL(DBConnection):
             database = databases[row['TABLE_SCHEMA'].lower()]
             if row['TABLE_NAME'].lower() not in database:
                 database[row['TABLE_NAME'].lower()] = {'NAME': row['TABLE_NAME']}
-            table = database[row['TABLE_NAME'].lower()]
-            table[row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'primary_key': row['COLUMN_KEY'] == 'PRI', 'auto_inc': row['EXTRA'] == 'auto_increment', 'name': row['COLUMN_NAME']}
+            database[row['TABLE_NAME'].lower()][row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'primary_key': row['COLUMN_KEY'] == 'PRI', 'auto_inc': row['EXTRA'] == 'auto_increment', 'name': row['COLUMN_NAME']}
         for database in databases.values():
             for table in database:
                 if table == 'NAME':
@@ -222,8 +223,7 @@ class MSSQL(DBConnection):
                 database = databases[row['TABLE_CATALOG'].lower()]
                 if row['TABLE_NAME'].lower() not in database:
                     database[row['TABLE_NAME'].lower()] = {'NAME': row['TABLE_NAME']}
-                table = database[row['TABLE_NAME'].lower()]
-                table[row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'name': row['COLUMN_NAME'], 'primary_key': row['CONSTRAINT_TYPE'] == 'PRIMARY KEY', 'auto_inc': row['is_identity'] or False}
+                database[row['TABLE_NAME'].lower()][row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'name': row['COLUMN_NAME'], 'primary_key': row['CONSTRAINT_TYPE'] == 'PRIMARY KEY', 'auto_inc': row['is_identity'] or False}
         for database in databases.values():
             for table in database:
                 if table == 'NAME':

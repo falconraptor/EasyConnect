@@ -1,6 +1,6 @@
 from functools import partial
 
-from db import MYSQL, ConnectionPool, MSSQL
+from .db_pool import MYSQL, ConnectionPool, MSSQL
 try:
     import pyodbc as pypyodbc
 except ImportError:
