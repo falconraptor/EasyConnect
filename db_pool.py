@@ -18,7 +18,7 @@ try:
     import pyodbc as pypyodbc
 except ImportError:
     try:
-        import pypyodbc
+        from . import pypyodbc
     except ImportError:
         class pypyodbc:
             def __getattribute__(self, item):
@@ -232,13 +232,13 @@ class MSSQL(DBConnection):
         return databases
 
 
-def map_dbs(wait: bool = False):
+def map_dbs(*classes: type, wait: bool = False):
     def get(c):
         start = datetime.now()
         SERVERS[c.__name__.lower()] = (c.get_databases(), c)
         print(f'[SERVER] {c.__name__}:', datetime.now() - start)
 
-    threads = [Thread(target=get, args=(c,)) for c in globals().values() if type(c) == type and issubclass(c, (MSSQL, MYSQL)) and c.__name__ not in {'MSSQL', 'MYSQL'}]
+    threads = [Thread(target=get, args=(c,)) for c in classes if type(c) == type and issubclass(c, (MSSQL, MYSQL)) and c.__name__ not in {'MSSQL', 'MYSQL'}]
     [thread.start() for thread in threads]
     if wait:
         [thread.join() for thread in threads]
