@@ -39,7 +39,10 @@ class TmpConnection:
         return self.con
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if isinstance(exc_type, (pymysql.OperationalError, pypyodbc.InterfaceError)):
+        if isinstance(exc_type, (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.ProgrammingError)):
+            if 'Packet sequence' not in exc_val and isinstance(exc_type, pymysql.ProgrammingError):
+                self.pool.free_connection(self.con)
+                return False
             self.con.close()
             self.pool.running.remove(self.con)
             self.pool.connections.remove(self.con)
@@ -232,7 +235,7 @@ class MSSQL(DBConnection):
         return databases
 
 
-def map_dbs(*classes: type, wait: bool = False):
+def map_dbs(classes: Iterable, wait: bool = False):
     def get(c):
         start = datetime.now()
         SERVERS[c.__name__.lower()] = (c.get_databases(), c)
