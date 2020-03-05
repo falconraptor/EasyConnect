@@ -39,10 +39,7 @@ class TmpConnection:
         return self.con
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if isinstance(exc_type, (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.ProgrammingError)):
-            if 'Packet sequence' not in exc_val and isinstance(exc_type, pymysql.ProgrammingError):
-                self.pool.free_connection(self.con)
-                return False
+        if isinstance(exc_type, (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError)):
             self.con.close()
             self.pool.running.remove(self.con)
             self.pool.connections.remove(self.con)
@@ -129,7 +126,7 @@ class DBConnection:
                 cursor.execute(sql, *([params] if params else []))
             cls._pool.free_connection(conn)
             [hook(sql, params) for hook in cls.success_hooks]
-        except (pymysql.OperationalError, pypyodbc.InterfaceError):
+        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError):
             conn.close()
             cls._pool.running.remove(conn)
             cls._pool.connections.remove(conn)
@@ -151,7 +148,7 @@ class DBConnection:
                 results = cursor.fetchone() or {}
             cls._pool.free_connection(conn)
             return results or {}
-        except (pymysql.OperationalError, pypyodbc.InterfaceError):
+        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError):
             conn.close()
             results = cls.fetch(sql, params)
             cls._pool.running.remove(conn)
@@ -175,7 +172,7 @@ class DBConnection:
                 results = cursor.fetchall()
             cls._pool.free_connection(conn)
             return results
-        except (pymysql.OperationalError, pypyodbc.InterfaceError):
+        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError):
             conn.close()
             results = cls.fetchall(sql, params)
             cls._pool.running.remove(conn)
