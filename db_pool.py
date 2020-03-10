@@ -107,6 +107,7 @@ class ConnectionPool:
 class DBConnection:
     _pool: ConnectionPool
     success_hooks: List[Callable[[str, Optional[Iterable]], None]] = []
+    failure_hooks: List[Callable[[str, Optional[Iterable]], None]] = []
 
     @classmethod
     def connection(cls) -> TmpConnection:
@@ -126,16 +127,20 @@ class DBConnection:
                 cursor.execute(sql, *([params] if params else []))
             cls._pool.free_connection(conn)
             [hook(sql, params) for hook in cls.success_hooks]
-        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError):
+        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
+            if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
+                raise e
             conn.close()
             cls._pool.running.remove(conn)
             cls._pool.connections.remove(conn)
             cls.execute(sql, params)
+            [hook(sql, params) for hook in cls.failure_hooks]
         except pypyodbc.Error as e:
             if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
                 raise e
             cls.execute(sql, params)
             cls._pool.free_connection(conn)
+            [hook(sql, params) for hook in cls.failure_hooks]
 
     @classmethod
     def fetch(cls, sql: str, params: Optional[Iterable] = None) -> Dict[str, Any]:
@@ -148,7 +153,9 @@ class DBConnection:
                 results = cursor.fetchone() or {}
             cls._pool.free_connection(conn)
             return results or {}
-        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError):
+        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
+            if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
+                raise e
             conn.close()
             results = cls.fetch(sql, params)
             cls._pool.running.remove(conn)
@@ -172,7 +179,9 @@ class DBConnection:
                 results = cursor.fetchall()
             cls._pool.free_connection(conn)
             return results
-        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError):
+        except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
+            if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
+                raise e
             conn.close()
             results = cls.fetchall(sql, params)
             cls._pool.running.remove(conn)
