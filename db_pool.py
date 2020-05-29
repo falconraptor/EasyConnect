@@ -1,3 +1,4 @@
+import json
 from collections import Iterable
 from datetime import datetime
 from platform import system
@@ -124,7 +125,7 @@ class DBConnection:
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
-                cursor.execute(sql, *([params] if params else []))
+                cursor.execute(sql, *([[json.dumps(p) if isinstance(p, dict) else p for p in params]] if params else []))
             cls._pool.free_connection(conn)
             [hook(sql, params) for hook in cls.success_hooks]
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
