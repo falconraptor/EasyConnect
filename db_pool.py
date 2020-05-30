@@ -204,7 +204,7 @@ class MYSQL(DBConnection):
     @classmethod
     def get_databases(cls) -> Dict[str, dict]:
         databases = {}
-        for row in cls.fetchall("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY, EXTRA FROM information_schema.columns WHERE TABLE_SCHEMA NOT IN (%s, %s, %s, %s, %s) AND TABLE_SCHEMA NOT LIKE %s", ('information_schema', 'phpmyadmin', 'mysql', 'performance_schema', 'sys', 'phabricator%')):
+        for row in cls.fetchall("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY, EXTRA FROM information_schema.columns WHERE TABLE_SCHEMA NOT IN (%s, %s, %s, %s, %s) AND TABLE_SCHEMA NOT LIKE %s ORDER BY TABLE_SCHEMA, TABLE_NAME", ('information_schema', 'phpmyadmin', 'mysql', 'performance_schema', 'sys', 'phabricator%')):
             if row['TABLE_SCHEMA'].lower() not in databases:
                 databases[row['TABLE_SCHEMA'].lower()] = {'NAME': row['TABLE_SCHEMA']}
             database = databases[row['TABLE_SCHEMA'].lower()]
@@ -225,9 +225,9 @@ class MSSQL(DBConnection):
     @classmethod
     def get_databases(cls) -> Dict[str, dict]:
         databases = {}
-        for db in cls.fetchall('SELECT "name" FROM master.dbo.sysdatabases WHERE "name" NOT IN (?, ?, ?, ?) and "name" NOT LIKE ?', ('master', 'tempdb', 'model', 'msdb', 'ReportServer%')):
+        for db in cls.fetchall('SELECT "name" FROM master.dbo.sysdatabases WHERE "name" NOT IN (?, ?, ?, ?) AND "name" NOT LIKE ? ORDER BY "name"', ('master', 'tempdb', 'model', 'msdb', 'ReportServer%')):
             db = f'"{db["name"]}"'
-            for row in cls.fetchall(f'SELECT c.TABLE_CATALOG, c.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION, c.COLUMN_DEFAULT, c.IS_NULLABLE, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, tc.CONSTRAINT_TYPE, ic.is_identity FROM {db}.information_schema.COLUMNS c LEFT JOIN {db}.information_schema.KEY_COLUMN_USAGE kcu ON c.TABLE_CATALOG=kcu.TABLE_CATALOG AND c.TABLE_NAME=kcu.TABLE_NAME AND c.COLUMN_NAME=kcu.COLUMN_NAME LEFT JOIN {db}.information_schema.TABLE_CONSTRAINTS tc ON kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME LEFT JOIN {db}.sys.tables t ON t.name=c.TABLE_NAME LEFT JOIN {db}.sys.identity_columns ic ON t.object_id=ic.object_id AND ic.name=c.COLUMN_NAME'):
+            for row in cls.fetchall(f'SELECT c.TABLE_CATALOG, c.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION, c.COLUMN_DEFAULT, c.IS_NULLABLE, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, tc.CONSTRAINT_TYPE, ic.is_identity FROM {db}.information_schema.COLUMNS c LEFT JOIN {db}.information_schema.KEY_COLUMN_USAGE kcu ON c.TABLE_CATALOG=kcu.TABLE_CATALOG AND c.TABLE_NAME=kcu.TABLE_NAME AND c.COLUMN_NAME=kcu.COLUMN_NAME LEFT JOIN {db}.information_schema.TABLE_CONSTRAINTS tc ON kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME LEFT JOIN {db}.sys.tables t ON t.name=c.TABLE_NAME LEFT JOIN {db}.sys.identity_columns ic ON t.object_id=ic.object_id AND ic.name=c.COLUMN_NAME ORDER BY c.TABLE_CATALOG, c.TABLE_NAME'):
                 if row['TABLE_CATALOG'].lower() not in databases:
                     databases[row['TABLE_CATALOG'].lower()] = {'NAME': row['TABLE_CATALOG']}
                 database = databases[row['TABLE_CATALOG'].lower()]
