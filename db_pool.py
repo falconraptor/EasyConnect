@@ -1,5 +1,5 @@
 import json
-from collections import Iterable
+from collections.abc import Iterable
 from datetime import datetime
 from platform import system
 from threading import Lock, Thread
