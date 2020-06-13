@@ -1,10 +1,10 @@
-from _datetime import datetime, time, date
-from decimal import Decimal
-from typing import Iterable, Optional
 import ctypes
 import os
 import sys
 import threading
+from _datetime import date, datetime, time
+from decimal import Decimal
+from typing import Iterable, Optional
 
 POOLING = True
 CONNECTION_TIMEOUT = 0
@@ -332,28 +332,40 @@ else:
     # unixODBC defaults to 2-bytes SQLWCHAR, unless "-DSQL_WCHART_CONVERT" was added to CFLAGS, in which case it will be the size of wchar_t.
     # Note that using 4-bytes SQLWCHAR will break most ODBC drivers, as driver development mostly targets the Windows platform.
     from subprocess import getstatusoutput
+
     status, output = getstatusoutput('odbc_config --cflags')
     SQLWCHAR_SIZE = ctypes.sizeof(ctypes.c_wchar if not status and 'SQL_WCHART_CONVERT' in output else ctypes.c_ushort)
     del status, output
 CREATE_BUFFER_U = ctypes.create_unicode_buffer
 CREATE_BUFFER = ctypes.create_string_buffer
 WCHAR_POINTER = ctypes.c_wchar_p
-UCS_BUF = lambda s: s
+
+
+def ucs_buf(s):
+    return s
 
 
 def ucs_dec(buffer) -> str:
     return buffer.raw.decode(ODBC_ENCODING).split('\x00')[0]
 
 
-FROM_BUFFER_U = lambda buffer: buffer.value
+def from_buffer_u(buffer):
+    return buffer.value
+
+
 # This is the common case on Linux, which uses wide Python build together with the default unixODBC without the "-DSQL_WCHART_CONVERT" CFLAGS.
 if sys.platform not in {'win32', 'cli', 'cygwin'}:
     if UNICODE_SIZE >= SQLWCHAR_SIZE:
         # We can only use unicode buffer if the size of wchar_t (UNICODE_SIZE) is the same as the size expected by the driver manager (SQLWCHAR_SIZE).
         CREATE_BUFFER_U = CREATE_BUFFER
         WCHAR_POINTER = ctypes.c_char_p
-        UCS_BUF = lambda s: s.encode(ODBC_ENCODING)
-        FROM_BUFFER_U = ucs_dec
+
+
+        def ucs_buf(s):
+            return s.encode(ODBC_ENCODING)
+
+
+        from_buffer_u = ucs_dec
     # Exoteric case, don't really care.
     elif UNICODE_SIZE < SQLWCHAR_SIZE:
         raise OdbcLibraryError('Using narrow Python build with ODBC library expecting wide unicode is not supported.')
@@ -416,9 +428,10 @@ def decimal_cvt(x) -> Decimal:
     return Decimal(x.decode('ascii'))
 
 
-BYTEARRAY_CVT = bytearray
+bytearray_cvt = bytearray
 if sys.platform == 'cli':
-    BYTEARRAY_CVT = lambda x: bytearray(memoryview(x))
+    def bytearray_cvt(x):
+        return bytearray(memoryview(x))
 # Below Datatype mappings referenced the document at
 # http://infocenter.sybase.com/help/index.jsp?topic=/com.sybase.help.sdk_12.5.1.aseodbc/html/aseodbc/CACFDIGH.htm
 SQL_DATA_TYPE_DICT = {
@@ -438,9 +451,9 @@ SQL_DATA_TYPE_DICT = {
     SQL_TIMESTAMP: (datetime, dttm_cvt, SQL_C_CHAR, CREATE_BUFFER, 30, False),
     SQL_VARCHAR: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 2048, True),
     SQL_LONGVARCHAR: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 20500, True),
-    SQL_BINARY: (bytearray, BYTEARRAY_CVT, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
-    SQL_VARBINARY: (bytearray, BYTEARRAY_CVT, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
-    SQL_LONGVARBINARY: (bytearray, BYTEARRAY_CVT, SQL_C_BINARY, CREATE_BUFFER, 20500, True),
+    SQL_BINARY: (bytearray, bytearray_cvt, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
+    SQL_VARBINARY: (bytearray, bytearray_cvt, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
+    SQL_LONGVARBINARY: (bytearray, bytearray_cvt, SQL_C_BINARY, CREATE_BUFFER, 20500, True),
     SQL_BIGINT: (int, int, SQL_C_CHAR, CREATE_BUFFER, 150, False),
     SQL_TINYINT: (int, int, SQL_C_CHAR, CREATE_BUFFER, 150, False),
     SQL_BIT: (bool, lambda x: x == b'1', SQL_C_CHAR, CREATE_BUFFER, 2, False),
@@ -453,7 +466,7 @@ SQL_DATA_TYPE_DICT = {
     SQL_TYPE_TIMESTAMP: (datetime, dttm_cvt, SQL_C_CHAR, CREATE_BUFFER, 30, False),
     SQL_SS_VARIANT: (str, lambda x: x, SQL_C_CHAR, CREATE_BUFFER, 2048, True),
     SQL_SS_XML: (str, lambda x: x, SQL_C_WCHAR, CREATE_BUFFER_U, 20500, True),
-    SQL_SS_UDT: (bytearray, BYTEARRAY_CVT, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
+    SQL_SS_UDT: (bytearray, bytearray_cvt, SQL_C_BINARY, CREATE_BUFFER, 5120, True),
 }
 """
 Types mapping, applicable for 32-bit and 64-bit Linux / Windows / Mac OS X.
@@ -579,10 +592,7 @@ def ctrl_err(ht, h, ansi: bool):
             # The handle passed is an invalid handle
             raise ProgrammingError('', 'SQL_INVALID_HANDLE')
         elif ret == SQL_SUCCESS:
-            if ansi:
-                err_list.append((state.value, message.value, native_error.value))
-            else:
-                err_list.append((FROM_BUFFER_U(state), FROM_BUFFER_U(message), native_error.value))
+            err_list.append((state.value, message.value, native_error.value) if ansi else (from_buffer_u(state), from_buffer_u(message), native_error.value))
             # number_errors += 1
         elif ret == -1:
             raise ProgrammingError('', 'SQL_ERROR')
@@ -606,7 +616,9 @@ A new one can be added by creating a callable that:
 
 
 def tuple_row(_):
-    return lambda _: _
+    def _tuple_row(_):
+        return _
+    return _tuple_row
 
 
 def dict_row(cursor):
@@ -705,7 +717,7 @@ class Cursor:
         if not self.connection:
             self.close()
         if isinstance(query_string, str):
-            c_query_string = WCHAR_POINTER(UCS_BUF(query_string))
+            c_query_string = WCHAR_POINTER(ucs_buf(query_string))
             ret = ODBC_API.SQLPrepareW(self.stmt_h, c_query_string, len(query_string))
         else:
             c_query_string = ctypes.c_char_p(query_string)
@@ -903,7 +915,7 @@ class Cursor:
                     c_char_buf = param_val
                     c_buf_len = len(c_char_buf)
                 elif param_types_0 in {'u', 'U'}:
-                    c_char_buf = UCS_BUF(param_val)
+                    c_char_buf = ucs_buf(param_val)
                     c_buf_len = len(c_char_buf)
                 elif param_types_0 == 'dt':
                     c_char_buf = bytes(param_val.strftime('%Y-%m-%d %H:%M:%S.%f')[:self.connection.type_size_dic[SQL_TYPE_TIMESTAMP][0]], 'ascii')
@@ -972,7 +984,7 @@ class Cursor:
             self._last_param_types = None
             self.statement = None
             if isinstance(query_string, str):
-                ret = ODBC_API.SQLExecDirectW(self.stmt_h, WCHAR_POINTER(UCS_BUF(query_string)), len(query_string))
+                ret = ODBC_API.SQLExecDirectW(self.stmt_h, WCHAR_POINTER(ucs_buf(query_string)), len(query_string))
             else:
                 ret = ODBC_API.SQLExecDirect(self.stmt_h, ctypes.c_char_p(query_string), len(query_string))
             check_success(self, ret)
@@ -1042,7 +1054,7 @@ class Cursor:
             if ret != SQL_SUCCESS:
                 check_success(self, ret)
             # (name, type_code, display_size,
-            col_descr.append((FROM_BUFFER_U(cname), SQL_DATA_TYPE_DICT.get(ctype_code.value, (ctype_code.value,))[0], cdisp_size.value, csize.value, csize.value, c_decimal_digits.value, cnull_ok.value == 1 and True or False))
+            col_descr.append((from_buffer_u(cname), SQL_DATA_TYPE_DICT.get(ctype_code.value, (ctype_code.value,))[0], cdisp_size.value, csize.value, csize.value, c_decimal_digits.value, cnull_ok.value == 1 and True or False))
             self._col_type_code_list.append(ctype_code.value)
         if len(col_descr) > 0:
             self.description = col_descr
@@ -1110,7 +1122,7 @@ class Cursor:
                                 elif target_type == SQL_C_WCHAR:
                                     if used_buf_len.value < total_buf_len:
                                         ctypes.memset(ctypes.addressof(alloc_buffer) + used_buf_len.value, 0, 1)
-                                    value_list.append(buf_cvt_func(FROM_BUFFER_U(alloc_buffer)))
+                                    value_list.append(buf_cvt_func(from_buffer_u(alloc_buffer)))
                                 elif alloc_buffer.value == '':
                                     value_list.append('')
                                 else:
@@ -1120,7 +1132,7 @@ class Cursor:
                                 if target_type == SQL_C_BINARY:
                                     raw_data_parts.append(alloc_buffer.raw[:used_buf_len.value])
                                 elif target_type == SQL_C_WCHAR:
-                                    raw_data_parts.append(FROM_BUFFER_U(alloc_buffer))
+                                    raw_data_parts.append(from_buffer_u(alloc_buffer))
                                 else:
                                     raw_data_parts.append(alloc_buffer.value)
                         break
@@ -1129,7 +1141,7 @@ class Cursor:
                         if target_type == SQL_C_BINARY:
                             raw_data_parts.append(alloc_buffer.raw[:used_buf_len.value])
                         elif target_type == SQL_C_WCHAR:
-                            raw_data_parts.append(FROM_BUFFER_U(alloc_buffer))
+                            raw_data_parts.append(from_buffer_u(alloc_buffer))
                         else:
                             raw_data_parts.append(alloc_buffer.value)
                     elif ret == SQL_NO_DATA:
@@ -1269,7 +1281,7 @@ class Connection:
         # Convert the connetsytring to encoded string so it can be converted to a ctypes c_char array object
         self.ansi = ansi
         if not ansi:
-            c_connect_string = WCHAR_POINTER(UCS_BUF(self.connectString))
+            c_connect_string = WCHAR_POINTER(ucs_buf(self.connectString))
             odbc_func = ODBC_API.SQLDriverConnectW
         else:
             c_connect_string = ctypes.c_char_p(self.connectString)
