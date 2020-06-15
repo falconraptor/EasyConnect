@@ -23,7 +23,8 @@ setuptools.setup(
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: Implementation :: CPython"
+        "Programming Language :: Python :: Implementation :: CPython",
+        "Topic :: Database"
     ],
     python_requires='>=3.6',
     package_data={'litespeed': ['html/*.html']},

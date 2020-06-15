@@ -203,7 +203,7 @@ class MYSQL(DBConnection):
 
 
 class MSSQL(DBConnection):
-    _driver = ([_ for _ in pypyodbc.drivers()] or ['FreeTDS'])[0] if system() == 'Linux' else ([_ for _ in pypyodbc.drivers() if 'SQL Server' in _] or ['SQL Server'])[0]
+    _driver = 'FreeTDS' if system() == 'Linux' else ([_ for _ in pypyodbc.drivers() if 'SQL Server' in _] or ['SQL Server'])[0]
 
     def __init__(self, host: str, user: str, password: str, database: str = '', port: int = 1433, program_name: str = ''):
         self._pool = ConnectionPool(partial(pypyodbc.connect, f'DRIVER={MSSQL._driver};SERVER={host},{port};UID={user};PWD={password};DATABASE={database};APP={program_name}'))
