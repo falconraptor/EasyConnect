@@ -1,32 +1,12 @@
 import json
 from collections.abc import Iterable
-from datetime import datetime
+from functools import partial
 from platform import system
 from threading import Lock, Thread
 from time import sleep
 from typing import List, Dict, Any, Optional, Callable
 
-try:
-    import pymysql
-except ImportError:
-    class pymysql:
-        def __getattribute__(self, item):
-            pass
-
-        def __setattr__(self, key, value):
-            pass
-try:
-    import pyodbc as pypyodbc
-except ImportError:
-    try:
-        from . import pypyodbc
-    except ImportError:
-        class pypyodbc:
-            def __getattribute__(self, item):
-                pass
-
-            def __setattr__(self, key, value):
-                pass
+from easyconnect.types import pymysql, pypyodbc
 
 SERVERS = {}
 
@@ -201,6 +181,9 @@ class DBConnection:
 
 
 class MYSQL(DBConnection):
+    def __init__(self, host: str, user: str, password: str, database: Optional[str] = None, port: Optional[int] = None, autocommit: Optional[bool] = None, program_name: Optional[str] = None):
+        self._pool = ConnectionPool(partial(pymysql.connect, host=host, user=user, password=password, database=database, port=port, cursorclass=pymysql.DictCursor, autocommit=autocommit, program_name=program_name))
+
     @classmethod
     def get_databases(cls) -> Dict[str, dict]:
         databases = {}
@@ -220,7 +203,10 @@ class MYSQL(DBConnection):
 
 
 class MSSQL(DBConnection):
-    _driver = 'FreeTDS' if system() == 'Linux' else 'SQL Server'
+    _driver = ([_ for _ in pypyodbc.drivers()] or ['FreeTDS'])[0] if system() == 'Linux' else ([_ for _ in pypyodbc.drivers() if 'SQL Server' in _] or ['SQL Server'])[0]
+
+    def __init__(self, host: str, user: str, password: str, database: str = '', port: int = 1433, program_name: str = ''):
+        self._pool = ConnectionPool(partial(pypyodbc.connect, f'DRIVER={MSSQL._driver};SERVER={host},{port};UID={user};PWD={password};DATABASE={database};APP={program_name}'))
 
     @classmethod
     def get_databases(cls) -> Dict[str, dict]:
@@ -240,18 +226,3 @@ class MSSQL(DBConnection):
                     continue
                 database[table] = {k: {a: b for a, b in v.items() if a != 'position'} if k != 'NAME' else v for k, v in sorted(database[table].items(), key=lambda d: d[1]['position'] if d[0] != 'NAME' else 999)}
         return databases
-
-
-def map_dbs(classes: Iterable, wait: bool = False):
-    def get(c):
-        start = datetime.now()
-        SERVERS[c.__name__.lower()] = (c.get_databases(), c)
-        print(f'[SERVER] {c.__name__}:', datetime.now() - start)
-
-    threads = [Thread(target=get, args=(c,)) for c in classes if type(c) == type and issubclass(c, (MSSQL, MYSQL)) and c.__name__ not in {'MSSQL', 'MYSQL'}]
-    [thread.start() for thread in threads]
-    if wait:
-        [thread.join() for thread in threads]
-
-
-pypyodbc.pooling = False

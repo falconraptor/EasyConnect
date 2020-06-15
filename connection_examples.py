@@ -1,16 +1,15 @@
-from functools import partial
-
-from .db_pool import MYSQL, ConnectionPool, MSSQL
-try:
-    import pyodbc as pypyodbc
-except ImportError:
-    import pypyodbc
-import pymysql
+from easyconnect.db_pool import MYSQL, MSSQL
 
 
 class MSSQL_TEST(MSSQL):
-    _pool: ConnectionPool = ConnectionPool(partial(pypyodbc.connect, f'DRIVER={MSSQL._driver};SERVER={server};UID={user};PWD={password};DATABASE={database};APP={program_name}'))
+    def __init__(self):
+        super().__init__('321.159.456.258', '', '...', '')
 
 
 class MYSQL_TEST(MYSQL):
-    _pool: ConnectionPool = ConnectionPool(partial(pymysql.connect, host=, user=, password=, database=, cursorclass=DictCursor, autocommit=None, program_name=))
+    def __init__(self):
+        super().__init__('321.159.456.258', '', '...', '')
+
+
+mssql_test_2 = MSSQL('321.159.456.258', '', '...', '')
+mysql_test_2 = MYSQL('321.159.456.258', '', '...', '')

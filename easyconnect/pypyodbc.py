@@ -1426,4 +1426,35 @@ class Connection:
             cur.execute(query_string, params, many_mode)
 
 
+def allocate_env():
+    global SHARED_ENV_H
+    SHARED_ENV_H = ctypes.c_void_p()
+    check_success(SHARED_ENV_H, ODBC_API.SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, ADDR(SHARED_ENV_H)))
+    # Set the ODBC environment's compatibility to ODBC 3.0
+    check_success(SHARED_ENV_H, ODBC_API.SQLSetEnvAttr(SHARED_ENV_H, 200, 3, 0))
+
+
+def drivers():
+    if sys.platform not in {'win32', 'cli'}:
+        raise Exception('This function is available for use in Windows only.')
+    if SHARED_ENV_H is None:
+        allocate_env()
+    driver_description = CREATE_BUFFER_U(1000)
+    buffer_length1 = ctypes.c_short(1000)
+    description_length = ctypes.c_short()
+    driver_attributes = CREATE_BUFFER_U(1000)
+    buffer_length2 = ctypes.c_short(1000)
+    attributes_length = ctypes.c_short()
+    ret = SQL_SUCCESS
+    driver_list = []
+    direction = 0x02
+    while ret != SQL_NO_DATA:
+        ret = ODBC_API.SQLDriversW(SHARED_ENV_H, direction, driver_description, buffer_length1, ADDR(description_length), driver_attributes, buffer_length2, ADDR(attributes_length))
+        check_success(SHARED_ENV_H, ret)
+        driver_list.append(driver_description.value)
+        if direction == 0x02:
+            direction = 0x01
+    return driver_list
+
+
 connect = Connection
