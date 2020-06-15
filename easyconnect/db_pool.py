@@ -90,97 +90,101 @@ class DBConnection:
     success_hooks: List[Callable[[str, Optional[Iterable]], None]] = []
     failure_hooks: List[Callable[[str, Optional[Iterable]], None]] = []
 
-    def connection(self) -> TmpConnection:
-        return self._pool.connection()
+    @classmethod
+    def connection(cls) -> TmpConnection:
+        return cls._pool.connection()
 
-    def cursor(self) -> TmpCursor:
-        return self._pool.cursor()
+    @classmethod
+    def cursor(cls) -> TmpCursor:
+        return cls._pool.cursor()
 
-    def execute(self, sql: str, params: Optional[Iterable] = None):
-        if isinstance(self, MYSQL):
+    @classmethod
+    def execute(cls, sql: str, params: Optional[Iterable] = None):
+        if issubclass(cls, MYSQL):
             sql = sql.replace('?', '%s')
-        conn = self._pool.get_connection()
+        conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, *([[json.dumps(p) if isinstance(p, dict) else p for p in params]] if params else []))
-            self._pool.free_connection(conn)
-            [hook(sql, params) for hook in self.success_hooks]
+            cls._pool.free_connection(conn)
+            [hook(sql, params) for hook in cls.success_hooks]
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
             if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
                 raise e
             conn.close()
-            self._pool.running.remove(conn)
-            self._pool.connections.remove(conn)
-            self.execute(sql, params)
-            [hook(sql, params) for hook in self.failure_hooks]
+            cls._pool.running.remove(conn)
+            cls._pool.connections.remove(conn)
+            cls.execute(sql, params)
+            [hook(sql, params) for hook in cls.failure_hooks]
         except pypyodbc.Error as e:
             if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
                 raise e
-            self.execute(sql, params)
-            self._pool.free_connection(conn)
-            [hook(sql, params) for hook in self.failure_hooks]
+            cls.execute(sql, params)
+            cls._pool.free_connection(conn)
+            [hook(sql, params) for hook in cls.failure_hooks]
 
-    def fetch(self, sql: str, params: Optional[Iterable] = None) -> Dict[str, Any]:
-        if isinstance(self, MYSQL):
+    @classmethod
+    def fetch(cls, sql: str, params: Optional[Iterable] = None) -> Dict[str, Any]:
+        if issubclass(cls, MYSQL):
             sql = sql.replace('?', '%s')
-        conn = self._pool.get_connection()
+        conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, *([params] if params else []))
                 results = cursor.fetchone() or {}
-            self._pool.free_connection(conn)
+            cls._pool.free_connection(conn)
             return results or {}
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
             if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
                 raise e
             conn.close()
-            results = self.fetch(sql, params)
-            self._pool.running.remove(conn)
-            self._pool.connections.remove(conn)
+            results = cls.fetch(sql, params)
+            cls._pool.running.remove(conn)
+            cls._pool.connections.remove(conn)
             return results or {}
         except pypyodbc.Error as e:
             if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
                 raise e
-            results = self.fetch(sql, params)
-            self._pool.free_connection(conn)
+            results = cls.fetch(sql, params)
+            cls._pool.free_connection(conn)
             return results or {}
 
-    def fetchall(self, sql: str, params: Optional[Iterable] = None) -> List[Dict[str, Any]]:
-        if isinstance(self, MYSQL):
+    @classmethod
+    def fetchall(cls, sql: str, params: Optional[Iterable] = None) -> List[Dict[str, Any]]:
+        if issubclass(cls, MYSQL):
             sql = sql.replace('?', '%s')
-        conn = self._pool.get_connection()
+        conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, *([params] if params else []))
                 results = cursor.fetchall()
-            self._pool.free_connection(conn)
+            cls._pool.free_connection(conn)
             return results
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
             if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
                 raise e
             conn.close()
-            results = self.fetchall(sql, params)
-            self._pool.running.remove(conn)
-            self._pool.connections.remove(conn)
+            results = cls.fetchall(sql, params)
+            cls._pool.running.remove(conn)
+            cls._pool.connections.remove(conn)
             return results
         except pypyodbc.Error as e:
             if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
                 raise e
-            results = self.fetchall(sql, params)
-            self._pool.free_connection(conn)
+            results = cls.fetchall(sql, params)
+            cls._pool.free_connection(conn)
             return results
 
-    def get_databases(self) -> Dict[str, dict]:  # used for api mapping
+    @classmethod
+    def get_databases(cls) -> Dict[str, dict]:  # used for api mapping
         raise NotImplementedError
 
 
 class MYSQL(DBConnection):
-    def __init__(self, host: str, user: str, password: str, database: Optional[str] = None, port: Optional[int] = None, autocommit: Optional[bool] = None, program_name: Optional[str] = None):
-        self._pool = ConnectionPool(partial(pymysql.connect, host=host, user=user, password=password, database=database, port=port, cursorclass=pymysql.cursors.DictCursor, autocommit=autocommit, program_name=program_name))
-
-    def get_databases(self) -> Dict[str, dict]:
+    @classmethod
+    def get_databases(cls) -> Dict[str, dict]:
         databases = {}
-        for row in self.fetchall("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY, EXTRA FROM information_schema.columns WHERE TABLE_SCHEMA NOT IN (%s, %s, %s, %s, %s) AND TABLE_SCHEMA NOT LIKE %s ORDER BY TABLE_SCHEMA, TABLE_NAME", ('information_schema', 'phpmyadmin', 'mysql', 'performance_schema', 'sys', 'phabricator%')):
+        for row in cls.fetchall("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY, EXTRA FROM information_schema.columns WHERE TABLE_SCHEMA NOT IN (%s, %s, %s, %s, %s) AND TABLE_SCHEMA NOT LIKE %s ORDER BY TABLE_SCHEMA, TABLE_NAME", ('information_schema', 'phpmyadmin', 'mysql', 'performance_schema', 'sys', 'phabricator%')):
             if row['TABLE_SCHEMA'].lower() not in databases:
                 databases[row['TABLE_SCHEMA'].lower()] = {'NAME': row['TABLE_SCHEMA']}
             database = databases[row['TABLE_SCHEMA'].lower()]
@@ -198,14 +202,12 @@ class MYSQL(DBConnection):
 class MSSQL(DBConnection):
     _driver = 'FreeTDS' if system() == 'Linux' else ([_ for _ in pypyodbc.drivers() if 'SQL Server' in _] or ['SQL Server'])[0]
 
-    def __init__(self, host: str, user: str, password: str, database: str = '', port: int = 1433, program_name: str = ''):
-        self._pool = ConnectionPool(partial(pypyodbc.connect, f'DRIVER={MSSQL._driver};SERVER={host},{port};UID={user};PWD={password};DATABASE={database};APP={program_name}'))
-
-    def get_databases(self) -> Dict[str, dict]:
+    @classmethod
+    def get_databases(cls) -> Dict[str, dict]:
         databases = {}
-        for db in self.fetchall('SELECT "name" FROM master.dbo.sysdatabases WHERE "name" NOT IN (?, ?, ?, ?) AND "name" NOT LIKE ? ORDER BY "name"', ('master', 'tempdb', 'model', 'msdb', 'ReportServer%')):
+        for db in cls.fetchall('SELECT "name" FROM master.dbo.sysdatabases WHERE "name" NOT IN (?, ?, ?, ?) AND "name" NOT LIKE ? ORDER BY "name"', ('master', 'tempdb', 'model', 'msdb', 'ReportServer%')):
             db = f'"{db["name"]}"'
-            for row in self.fetchall(f'SELECT c.TABLE_CATALOG, c.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION, c.COLUMN_DEFAULT, c.IS_NULLABLE, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, tc.CONSTRAINT_TYPE, ic.is_identity FROM {db}.information_schema.COLUMNS c LEFT JOIN {db}.information_schema.KEY_COLUMN_USAGE kcu ON c.TABLE_CATALOG=kcu.TABLE_CATALOG AND c.TABLE_NAME=kcu.TABLE_NAME AND c.COLUMN_NAME=kcu.COLUMN_NAME LEFT JOIN {db}.information_schema.TABLE_CONSTRAINTS tc ON kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME LEFT JOIN {db}.sys.tables t ON t.name=c.TABLE_NAME LEFT JOIN {db}.sys.identity_columns ic ON t.object_id=ic.object_id AND ic.name=c.COLUMN_NAME ORDER BY c.TABLE_CATALOG, c.TABLE_NAME'):
+            for row in cls.fetchall(f'SELECT c.TABLE_CATALOG, c.TABLE_NAME, c.COLUMN_NAME, c.ORDINAL_POSITION, c.COLUMN_DEFAULT, c.IS_NULLABLE, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, tc.CONSTRAINT_TYPE, ic.is_identity FROM {db}.information_schema.COLUMNS c LEFT JOIN {db}.information_schema.KEY_COLUMN_USAGE kcu ON c.TABLE_CATALOG=kcu.TABLE_CATALOG AND c.TABLE_NAME=kcu.TABLE_NAME AND c.COLUMN_NAME=kcu.COLUMN_NAME LEFT JOIN {db}.information_schema.TABLE_CONSTRAINTS tc ON kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME LEFT JOIN {db}.sys.tables t ON t.name=c.TABLE_NAME LEFT JOIN {db}.sys.identity_columns ic ON t.object_id=ic.object_id AND ic.name=c.COLUMN_NAME ORDER BY c.TABLE_CATALOG, c.TABLE_NAME'):
                 if row['TABLE_CATALOG'].lower() not in databases:
                     databases[row['TABLE_CATALOG'].lower()] = {'NAME': row['TABLE_CATALOG']}
                 database = databases[row['TABLE_CATALOG'].lower()]
