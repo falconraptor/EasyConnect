@@ -97,7 +97,7 @@ class DBConnection:
         return self._pool.cursor()
 
     def execute(self, sql: str, params: Optional[Iterable] = None):
-        if issubclass(self, MYSQL):
+        if isinstance(self, MYSQL):
             sql = sql.replace('?', '%s')
         conn = self._pool.get_connection()
         try:
@@ -121,7 +121,7 @@ class DBConnection:
             [hook(sql, params) for hook in self.failure_hooks]
 
     def fetch(self, sql: str, params: Optional[Iterable] = None) -> Dict[str, Any]:
-        if issubclass(self, MYSQL):
+        if isinstance(self, MYSQL):
             sql = sql.replace('?', '%s')
         conn = self._pool.get_connection()
         try:
@@ -146,7 +146,7 @@ class DBConnection:
             return results or {}
 
     def fetchall(self, sql: str, params: Optional[Iterable] = None) -> List[Dict[str, Any]]:
-        if issubclass(self, MYSQL):
+        if isinstance(self, MYSQL):
             sql = sql.replace('?', '%s')
         conn = self._pool.get_connection()
         try:

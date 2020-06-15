@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="EasyConnect",
-    version="1.0.0",
+    version="1.0.2",
     author="Dustin Surwill",
     author_email="dustinsurwill@gmail.com",
     description="A custom connection pool for pyodbc, pypyodbc, pymysql. Includes custom version of pypyodbc which only supports MS SQL Servers and Python 3+.",
