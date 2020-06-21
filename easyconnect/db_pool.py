@@ -1,6 +1,5 @@
 import json
 from collections.abc import Iterable
-from functools import partial
 from platform import system
 from threading import Lock, Thread
 from time import sleep
@@ -178,6 +177,10 @@ class DBConnection:
     @classmethod
     def get_databases(cls) -> Dict[str, dict]:  # used for api mapping
         raise NotImplementedError
+
+    @classmethod
+    def wrapper(cls):
+        return '`' if issubclass(cls, MYSQL) else '"'
 
 
 class MYSQL(DBConnection):
