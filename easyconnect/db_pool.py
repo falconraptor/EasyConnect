@@ -1,4 +1,6 @@
 import json
+import re
+import sqlite3
 from collections.abc import Iterable
 from platform import system
 from threading import Lock, Thread
@@ -78,7 +80,10 @@ class ConnectionPool:
                 kw['program_name'] += f' {self.num}'
                 conn = self.connect.func(**kw)
             else:
-                conn = self.connect.func(self.connect.args[0] + f' {self.num}')
+                if '_sqlite3' == self.connect.func.__module__:
+                    conn = self.connect()
+                else:
+                    conn = self.connect.func(self.connect.args[0] + f' {self.num}')
             self.connections.append(conn)
         self.running.append(conn)
         return conn
@@ -98,80 +103,88 @@ class DBConnection:
         return cls._pool.cursor()
 
     @classmethod
-    def execute(cls, sql: str, params: Optional[Iterable] = None):
+    def execute(cls, sql: str, *params: Any):
         if issubclass(cls, MYSQL):
             sql = sql.replace('?', '%s')
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
-                cursor.execute(sql, *([[json.dumps(p) if isinstance(p, dict) else p for p in params]] if params else []))
+                cursor.execute(sql, (json.dumps(p) if isinstance(p, dict) else p for p in params))
             cls._pool.free_connection(conn)
             [hook(sql, params) for hook in cls.success_hooks]
+        except (pypyodbc.Error, sqlite3.ProgrammingError) as e:
+            if isinstance(e, sqlite3.ProgrammingError) and 'same thread' not in e.__repr__():
+                raise e
+            if isinstance(e, pypyodbc.Error) and 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
+                raise e
+            cls.execute(sql, *params)
+            cls._pool.free_connection(conn)
+            [hook(sql, params) for hook in cls.failure_hooks]
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
-            if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
+            if isinstance(e, pymysql.InternalError) and pymysql.__module__ != 'easyconnect.types' and 'Packet sequence' not in e.__repr__():
                 raise e
             conn.close()
+            cls.execute(sql, *params)
             cls._pool.running.remove(conn)
             cls._pool.connections.remove(conn)
-            cls.execute(sql, params)
-            [hook(sql, params) for hook in cls.failure_hooks]
-        except pypyodbc.Error as e:
-            if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
-                raise e
-            cls.execute(sql, params)
-            cls._pool.free_connection(conn)
             [hook(sql, params) for hook in cls.failure_hooks]
 
     @classmethod
-    def fetch(cls, sql: str, params: Optional[Iterable] = None) -> Dict[str, Any]:
+    def fetch(cls, sql: str, *params: Any) -> Dict[str, Any]:
         if issubclass(cls, MYSQL):
             sql = sql.replace('?', '%s')
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
-                cursor.execute(sql, *([params] if params else []))
+                cursor.execute(sql, params)
                 results = cursor.fetchone() or {}
             cls._pool.free_connection(conn)
             return results or {}
+        except (pypyodbc.Error, sqlite3.ProgrammingError) as e:
+            if isinstance(e, sqlite3.ProgrammingError) and 'same thread' not in e.__repr__():
+                raise e
+            if isinstance(e, pypyodbc.Error) and 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
+                raise e
+            results = cls.fetch(sql, *params)
+            cls._pool.free_connection(conn)
+            return results or {}
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
-            if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
+            if isinstance(e, pymysql.InternalError) and pymysql.__module__ != 'easyconnect.types' and 'Packet sequence' not in e.__repr__():
                 raise e
             conn.close()
-            results = cls.fetch(sql, params)
+            results = cls.fetch(sql, *params)
             cls._pool.running.remove(conn)
             cls._pool.connections.remove(conn)
             return results or {}
-        except pypyodbc.Error as e:
-            if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
-                raise e
-            results = cls.fetch(sql, params)
-            cls._pool.free_connection(conn)
-            return results or {}
 
     @classmethod
-    def fetchall(cls, sql: str, params: Optional[Iterable] = None) -> List[Dict[str, Any]]:
+    def fetchall(cls, sql: str, *params: Any) -> List[Dict[str, Any]]:
         if issubclass(cls, MYSQL):
             sql = sql.replace('?', '%s')
         conn = cls._pool.get_connection()
         try:
             with conn.cursor() as cursor:
-                cursor.execute(sql, *([params] if params else []))
+                cursor.execute(sql, params)
                 results = cursor.fetchall()
             cls._pool.free_connection(conn)
             return results
+        except (pypyodbc.Error, sqlite3.ProgrammingError) as e:
+            if isinstance(e, sqlite3.ProgrammingError) and 'same thread' not in e.__repr__():
+                raise e
+            if isinstance(e, pypyodbc.Error) and 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
+                raise e
+            results = cls.fetchall(sql, *params)
+            cls._pool.free_connection(conn)
+            return results
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
+            if isinstance(e, (pymysql.InternalError, pymysql.OperationalError)) and pymysql.__module__  == 'easyconnect.types':
+                raise e
             if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
                 raise e
             conn.close()
-            results = cls.fetchall(sql, params)
+            results = cls.fetchall(sql, *params)
             cls._pool.running.remove(conn)
             cls._pool.connections.remove(conn)
-            return results
-        except pypyodbc.Error as e:
-            if 'Connection is busy' not in repr(e) and 'Invalid cursor state' not in repr(e):
-                raise e
-            results = cls.fetchall(sql, params)
-            cls._pool.free_connection(conn)
             return results
 
     @classmethod
@@ -181,6 +194,15 @@ class DBConnection:
     @classmethod
     def wrapper(cls):
         return '`' if issubclass(cls, MYSQL) else '"'
+
+    @staticmethod
+    def _sort_db_columns(databases):
+        for database in databases.values():
+            for table in database:
+                if table == 'NAME':
+                    continue
+                database[table] = {k: {a: b for a, b in v.items() if a != 'position'} if k != 'NAME' else v for k, v in sorted(database[table].items(), key=lambda d: d[1]['position'] if d[0] != 'NAME' else 999)}
+        return databases
 
 
 class MYSQL(DBConnection):
@@ -194,12 +216,7 @@ class MYSQL(DBConnection):
             if row['TABLE_NAME'].lower() not in database:
                 database[row['TABLE_NAME'].lower()] = {'NAME': row['TABLE_NAME']}
             database[row['TABLE_NAME'].lower()][row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'primary_key': row['COLUMN_KEY'] == 'PRI', 'auto_inc': row['EXTRA'] == 'auto_increment', 'name': row['COLUMN_NAME']}
-        for database in databases.values():
-            for table in database:
-                if table == 'NAME':
-                    continue
-                database[table] = {k: {a: b for a, b in v.items() if a != 'position'} if k != 'NAME' else v for k, v in sorted(database[table].items(), key=lambda d: d[1]['position'] if d[0] != 'NAME' else 999)}
-        return databases
+        return cls._sort_db_columns(databases)
 
 
 class MSSQL(DBConnection):
@@ -217,9 +234,41 @@ class MSSQL(DBConnection):
                 if row['TABLE_NAME'].lower() not in database:
                     database[row['TABLE_NAME'].lower()] = {'NAME': row['TABLE_NAME']}
                 database[row['TABLE_NAME'].lower()][row['COLUMN_NAME'].lower()] = {'position': row['ORDINAL_POSITION'], 'default': row['COLUMN_DEFAULT'], 'nullable': row['IS_NULLABLE'] == 'YES', 'type': row['DATA_TYPE'], 'max_length': row['CHARACTER_MAXIMUM_LENGTH'] or -1, 'name': row['COLUMN_NAME'], 'primary_key': row['CONSTRAINT_TYPE'] == 'PRIMARY KEY', 'auto_inc': row['is_identity'] or False}
-        for database in databases.values():
-            for table in database:
-                if table == 'NAME':
-                    continue
-                database[table] = {k: {a: b for a, b in v.items() if a != 'position'} if k != 'NAME' else v for k, v in sorted(database[table].items(), key=lambda d: d[1]['position'] if d[0] != 'NAME' else 999)}
-        return databases
+        return cls._sort_db_columns(databases)
+
+
+class SQLite(DBConnection):
+    __length_re = re.compile(r'(\d+)')
+
+    @classmethod
+    def get_databases(cls) -> Dict[str, dict]:
+        databases = {}
+        for db in cls.fetchall('PRAGMA database_list'):
+            db = db['name']
+            db_dict = databases[db.lower()] = {'NAME': db}
+            for table in cls.fetchall(f'SELECT name, sql FROM "{db}".sqlite_master WHERE type=?', 'table'):
+                table_dict = db_dict[table['name'].lower()] = {'NAME': table['name']}
+                for columns in cls.fetchall(f'''pragma "{db}".table_info('{table["name"]}')'''):
+                    table_dict[columns['name'].lower()] = {'position': columns['cid'], 'default': columns['dflt_value'], 'nullable': columns['notnull'] == 0, 'type': columns['type'], 'max_length': int((re.search(r'(\d+)', columns['type']) or [None, -1])[1]), 'name': columns['name'], 'primary_key': columns['pk'] == 1, 'auto_inc': 'autoincrement' in re.search(rf'{columns["name"]} ([\w\s]+),', table['sql'])[1] if columns['type'].lower() == 'integer' and columns['pk'] else False}
+        return cls._sort_db_columns(databases)
+
+    class Cursor(sqlite3.Cursor):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if exc_tb:
+                return False
+
+    class Connection(sqlite3.Connection):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.row_factory = lambda cursor, row: {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
+
+
+def __cursor(self, factory=SQLite.Cursor):
+    return self._cursor(factory)
+
+
+SQLite.Connection._cursor = SQLite.Connection.cursor
+SQLite.Connection.cursor = __cursor
