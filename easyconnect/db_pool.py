@@ -177,7 +177,7 @@ class DBConnection:
             cls._pool.free_connection(conn)
             return results
         except (pymysql.OperationalError, pypyodbc.InterfaceError, pymysql.InternalError) as e:
-            if isinstance(e, (pymysql.InternalError, pymysql.OperationalError)) and pymysql.__module__  == 'easyconnect.types':
+            if isinstance(e, (pymysql.InternalError, pymysql.OperationalError)) and pymysql.__module__ == 'easyconnect.types':
                 raise e
             if isinstance(e, pymysql.InternalError) and 'Packet sequence' not in e.__repr__():
                 raise e
