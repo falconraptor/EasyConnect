@@ -1,6 +1,8 @@
 from platform import system
 from threading import Lock
 
+from easyconnect2.mappings import Server
+
 try:
     import pyodbc as pypyodbc
 except ImportError:
@@ -44,7 +46,7 @@ class ConnectionPool:
     def _get_connection(self):
         raise NotImplemented
 
-    def map_db(self):
+    def map_db(self) -> Server:
         raise NotImplemented  # TODO
 
     def generate_modals(self):
@@ -56,11 +58,8 @@ class ConnectionPool:
     def close_all(self):
         [conn.close() for conn in self.connections]
 
-    def __enter__(self):
-        return _Connection(self).__enter__()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+    def connection(self):
+        return _Connection(self)
 
 
 try:
