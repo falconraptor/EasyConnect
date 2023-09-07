@@ -11,7 +11,7 @@ try:
     import pyodbc as pypyodbc
 except ImportError:
     try:
-        from easyconnect import pypyodbc
+        from easyconnect_old import pypyodbc
     except ImportError:
         class pypyodbc:
             def __getattribute__(self, item):

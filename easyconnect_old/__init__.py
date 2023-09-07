@@ -2,8 +2,8 @@ from datetime import datetime
 from threading import Thread
 from typing import Iterable
 
-from easyconnect.db_pool import MSSQL, MYSQL, SERVERS
-from easyconnect.types import pypyodbc
+from easyconnect_old.db_pool import MSSQL, MYSQL, SERVERS
+from easyconnect_old.types import pypyodbc
 
 __all__ = ['MSSQL', 'MYSQL', 'SERVERS', 'map_dbs']
 
@@ -11,7 +11,7 @@ __all__ = ['MSSQL', 'MYSQL', 'SERVERS', 'map_dbs']
 def map_dbs(classes: Iterable, wait: bool = False, override: bool = False):
     def get(c):
         start = datetime.now()
-        c.mapping = SERVERS[c.__name__.lower()] = (c.get_databases(), c)
+        c.mapping = SERVERS[c.__name__.lower()] = (c.get_schemas(), c)
         print(f'[SERVER] {c.__name__}:', datetime.now() - start)
 
     if not override and SERVERS:

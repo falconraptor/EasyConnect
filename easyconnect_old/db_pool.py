@@ -1,12 +1,11 @@
 import json
 from collections.abc import Iterable
-from functools import partial
 from platform import system
 from threading import Lock, Thread
 from time import sleep
 from typing import List, Dict, Any, Optional, Callable
 
-from easyconnect.types import pymysql, pypyodbc
+from easyconnect_old.types import pymysql, pypyodbc
 
 SERVERS = {}
 

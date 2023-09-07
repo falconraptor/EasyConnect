@@ -8,7 +8,7 @@ setuptools.setup(
     version="1.0.5",
     author="Dustin Surwill",
     author_email="dustinsurwill@gmail.com",
-    description="A custom connection pool for pyodbc, pypyodbc, pymysql. Includes custom version of pypyodbc which only supports MS SQL Servers and Python 3+.",
+    description="A custom connection pool for databases.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/falconraptor/EasyConnect",
@@ -23,11 +23,11 @@ setuptools.setup(
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: Implementation :: CPython",
         "Topic :: Database"
     ],
-    python_requires='>=3.6',
-    package_data={'litespeed': ['html/*.html']},
-    include_package_data=True
+    python_requires='>=3.6'
 )
 

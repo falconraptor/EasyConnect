@@ -1,8 +1,8 @@
 from functools import partial
 
-from easyconnect import pypyodbc
-from easyconnect.db_pool import ConnectionPool, MYSQL, MSSQL
-from easyconnect.types import pymysql
+from easyconnect_old import pypyodbc
+from easyconnect_old.db_pool import ConnectionPool, MYSQL, MSSQL
+from easyconnect_old.types import pymysql
 
 
 class MSSQL_TEST(MSSQL):
